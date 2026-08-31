@@ -21,7 +21,7 @@ jobs:
         run: |
           echo "Downloading server..."
 
-          gh release download latest \
+          gh release download server \
             --repo "${{ github.repository }}" \
             --pattern "server.zip" \
             --dir .
