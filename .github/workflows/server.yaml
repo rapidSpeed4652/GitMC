@@ -1,10 +1,7 @@
-name: Minecraft Java Server
+name: Minecraft Server
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   server:
@@ -12,298 +9,94 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      # ─────────────────────────────────────────────
-      # Download server
-      # ─────────────────────────────────────────────
-      - name: Download server
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "Downloading server..."
-
-          gh release download server \
-            --repo "${{ github.repository }}" \
-            --pattern "server.zip" \
-            --dir .
-
-          unzip -q server.zip
-          rm server.zip
-
-          echo
-          echo "Server files:"
-          find . -maxdepth 2 -type f | sort
-
-      # ─────────────────────────────────────────────
-      # Java 21
-      # ─────────────────────────────────────────────
-      - name: Set up Java 21
+      - name: Install Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
 
-      - name: Check Java version
+      - name: Download Paper 26.2
         run: |
-          java -version
+          mkdir -p server
+          DOWNLOAD_URL=$(curl -s -H "User-Agent: minecraft-server/1.0" \
+            "https://fill.papermc.io/v3/projects/paper/versions/26.2/builds" | \
+            jq -r 'first(.[] | select(.channel == "STABLE") | .downloads."server:default".url)')
+          echo "Downloading: $DOWNLOAD_URL"
+          wget -O server/paper.jar "$DOWNLOAD_URL"
+          ls -la server/
 
-      # ─────────────────────────────────────────────
-      # Find server JAR
-      # ─────────────────────────────────────────────
-      - name: Find Minecraft server JAR
+      - name: Install bore
         run: |
-          SERVER_JAR=$(find . -maxdepth 2 -type f \
-            -name "*.jar" \
-            ! -name "*installer*" \
-            ! -name "*launcher*" \
-            | head -n 1)
+          wget -O bore.tar.gz \
+            "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz"
+          tar xzf bore.tar.gz
+          chmod +x bore
+          ./bore --version   
 
-          if [ -z "$SERVER_JAR" ]; then
-            echo "ERROR: No Minecraft server JAR found."
-            exit 1
-          fi
-
-          SERVER_JAR="${SERVER_JAR#./}"
-
-          echo "Found server JAR: $SERVER_JAR"
-          echo "SERVER_JAR=$SERVER_JAR" >> "$GITHUB_ENV"
-
-      # ─────────────────────────────────────────────
-      # Restore previous world
-      # ─────────────────────────────────────────────
-      - name: Restore previous world
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "Checking for previous world save..."
-
-          mkdir -p /tmp/world-save
-
-          if gh release download world-save \
-              --repo "${{ github.repository }}" \
-              --pattern "world.zip" \
-              --dir /tmp/world-save; then
-
-            echo "Previous world found."
-
-            rm -rf world
-
-            unzip -q /tmp/world-save/world.zip
-
-            if [ -d "world/world" ]; then
-              mv world/world/* world/ 2>/dev/null || true
-              mv world/world/.* world/ 2>/dev/null || true
-              rmdir world/world 2>/dev/null || true
-            fi
-
-            echo "World restored successfully."
-
-          else
-            echo "No previous world save found."
-            echo "A new world will be created."
-          fi
-
-      # ─────────────────────────────────────────────
-      # EULA
-      # ─────────────────────────────────────────────
-      - name: Accept Minecraft EULA
+      - name: Start Minecraft server
+        working-directory: server
         run: |
           echo "eula=true" > eula.txt
+          java -Xms1G -Xmx4G \
+            -jar paper.jar nogui \
+            > server.log 2>&1 &
+          echo $! > server.pid
 
-      # ─────────────────────────────────────────────
-      # Install dependencies
-      # ─────────────────────────────────────────────
-      - name: Install dependencies
+      - name: Wait for Minecraft server
+        working-directory: server
         run: |
-          sudo apt-get update
-          sudo apt-get install -y tmux unzip zip
+          for i in {1..120}; do
+            if grep -q "Done (" server.log; then
+              echo "Minecraft server is ready!"
+              break
+            fi
+            # Check if the process died
+            if ! kill -0 $(cat server.pid) 2>/dev/null; then
+              echo "Server process died!"
+              cat server.log
+              exit 1
+            fi
+            sleep 2
+          done
 
-      # ─────────────────────────────────────────────
-      # Install Playit
-      # ─────────────────────────────────────────────
-      - name: Install Playit
+          if ! grep -q "Done (" server.log; then
+            echo "Minecraft server failed to start (timeout)."
+            cat server.log
+            exit 1
+          fi   
+
+      - name: Start bore tunnel
         run: |
-          curl -SsL https://playit-cloud.github.io/ppa/key.gpg | \
-            gpg --dearmor | \
-            sudo tee /etc/apt/trusted.gpg.d/playit.gpg >/dev/null
+          ./bore local 25565 --to bore.pub > bore.log 2>&1 &
+          echo $! > bore.pid
 
-          echo "deb [signed-by=/etc/apt/trusted.gpg.d/playit.gpg] \
-            https://playit-cloud.github.io/ppa/data ./" | \
-            sudo tee /etc/apt/sources.list.d/playit-cloud.list
+          for i in {1..30}; do
+            ADDR=$(grep -oP 'bore\.pub:\K[0-9]+' bore.log | head -n1 || true)
+            if [ -n "$ADDR" ]; then
+              break
+            fi
+            sleep 2
+          done
 
-          sudo apt-get update
-          sudo apt-get install -y playit
-
-      # ─────────────────────────────────────────────
-      # Start Minecraft
-      # ─────────────────────────────────────────────
-      - name: Start Minecraft server
-        run: |
-          echo "Starting Minecraft..."
-
-          tmux new-session -d -s minecraft \
-            "java -Xms1G -Xmx4G -jar \"$SERVER_JAR\" nogui"
-
-          sleep 15
-
-          if ! tmux has-session -t minecraft 2>/dev/null; then
-            echo "ERROR: Minecraft server failed to start."
+          if [ -z "$ADDR" ]; then
+            echo "Bore tunnel failed to start."
+            cat bore.log
             exit 1
           fi
 
-          echo "Minecraft server is running."
+          echo ""
+          echo "=========================================="
+          echo "       MINECRAFT SERVER ADDRESS"
+          echo "=========================================="
+          echo ""
+          echo "bore.pub:${ADDR}"
+          echo ""
+          echo "=========================================="
 
-      # ─────────────────────────────────────────────
-      # Start Playit
-      # ─────────────────────────────────────────────
-      - name: Start Playit tunnel
+      - name: Monitor server
+        working-directory: server
         run: |
-          echo "Starting Playit..."
-
-          tmux new-session -d -s playit "playit"
-
-          sleep 10
-
-          echo
-          echo "════════════════════════════════════════"
-          echo "          PLAYIT INFORMATION"
-          echo "════════════════════════════════════════"
-
-          tmux capture-pane -pt playit -S -100 || true
-
-          echo "════════════════════════════════════════"
-          echo
-          echo "If Playit asks you to claim this agent,"
-          echo "open the URL shown above."
-          echo
-          echo "Your Minecraft address will appear after"
-          echo "the Playit tunnel is configured."
-          echo
-
-      # ─────────────────────────────────────────────
-      # Keep workflow alive
-      # ─────────────────────────────────────────────
-      - name: Run server
-        run: |
-          echo "Minecraft server is now running."
-          echo "Press 'Cancel workflow' to stop it."
-
-          while true; do
-
-            if ! tmux has-session -t minecraft 2>/dev/null; then
-              echo "Minecraft server stopped unexpectedly."
-              exit 1
-            fi
-
-            echo "[$(date '+%H:%M:%S')] Server running..."
-
+          while kill -0 $(cat server.pid) 2>/dev/null; do
             sleep 30
-
           done
-
-      # ─────────────────────────────────────────────
-      # Stop Minecraft cleanly
-      # ─────────────────────────────────────────────
-      - name: Stop Minecraft server
-        if: always()
-        run: |
-          echo "Stopping Minecraft server..."
-
-          if tmux has-session -t minecraft 2>/dev/null; then
-
-            echo "Sending stop command..."
-            tmux send-keys -t minecraft "stop" Enter
-
-            echo "Waiting for Minecraft to save the world..."
-            sleep 20
-
-            if tmux has-session -t minecraft 2>/dev/null; then
-              echo "Minecraft did not exit normally."
-              tmux kill-session -t minecraft || true
-            else
-              echo "Minecraft shut down cleanly."
-            fi
-
-          else
-            echo "Minecraft process is already stopped."
-          fi
-
-      # ─────────────────────────────────────────────
-      # Save world
-      # ─────────────────────────────────────────────
-      - name: Create world backup
-        if: always()
-        run: |
-          if [ ! -d "world" ]; then
-            echo "No world directory found."
-            exit 0
-          fi
-
-          echo "Creating world backup..."
-
-          rm -f /tmp/world.zip
-
-          zip -r -q /tmp/world.zip world
-
-          echo
-          echo "World backup created:"
-          ls -lh /tmp/world.zip
-
-      # ─────────────────────────────────────────────
-      # Create world-save release
-      # ─────────────────────────────────────────────
-      - name: Create world-save release
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view world-save \
-              --repo "${{ github.repository }}" >/dev/null 2>&1; then
-
-            echo "world-save release already exists."
-
-          else
-
-            echo "Creating world-save release..."
-
-            gh release create world-save \
-              --repo "${{ github.repository }}" \
-              --title "Minecraft World Save" \
-              --notes "Automatically updated Minecraft world save."
-
-          fi
-
-      # ─────────────────────────────────────────────
-      # Upload world
-      # ─────────────────────────────────────────────
-      - name: Upload world backup
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ ! -f /tmp/world.zip ]; then
-            echo "No world backup to upload."
-            exit 0
-          fi
-
-          echo "Uploading world..."
-
-          gh release upload world-save \
-            /tmp/world.zip \
-            --repo "${{ github.repository }}" \
-            --clobber
-
-          echo "World save uploaded successfully."
-
-      # ─────────────────────────────────────────────
-      # Stop Playit
-      # ─────────────────────────────────────────────
-      - name: Stop Playit
-        if: always()
-        run: |
-          echo "Stopping Playit..."
-
-          if tmux has-session -t playit 2>/dev/null; then
-            tmux kill-session -t playit
-          fi
-
-          echo "Playit stopped."
+          echo "Minecraft server stopped."   
