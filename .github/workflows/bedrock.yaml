@@ -75,7 +75,11 @@ jobs:
 
           echo "Fetching official Minecraft Bedrock download page..."
 
-          curl -fsSL \
+          curl --http1.1 \
+            --retry 5 \
+            --retry-delay 3 \
+            --retry-all-errors \
+            -fsSL \
             https://www.minecraft.net/en-us/download/server/bedrock \
             -o download.html
 
@@ -88,20 +92,13 @@ jobs:
 
           if [ -z "$DOWNLOAD_URL" ]; then
             echo "ERROR: Could not find the Bedrock server download URL."
-            echo
-            echo "Relevant page contents:"
-            grep -oE \
-              'https://[^"]*bedrock-server-[^"]+\.zip' \
-              download.html \
-              | head -20 || true
             exit 1
           fi
 
           echo "Found:"
           echo "$DOWNLOAD_URL"
 
-          echo
-          echo "Downloading..."
+          echo "Downloading Bedrock server..."
 
           wget \
             --retry-connrefused \
@@ -110,10 +107,6 @@ jobs:
             -O bedrock.zip \
             "$DOWNLOAD_URL"
 
-          echo
-          echo "Downloaded:"
-          ls -lh bedrock.zip
-
           echo "Extracting..."
 
           unzip -q bedrock.zip
@@ -121,9 +114,7 @@ jobs:
 
           chmod +x bedrock_server
 
-          echo
-          echo "Bedrock Dedicated Server installed:"
-          ls -lh bedrock_server
+          echo "Bedrock server installed successfully."
 
       # ─────────────────────────────────────────────
       # Configure fixed world name
