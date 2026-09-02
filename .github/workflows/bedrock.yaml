@@ -70,7 +70,7 @@ jobs:
       # Download latest official Bedrock server
       # ─────────────────────────────────────────────
 
-            - name: Download latest Bedrock server
+      - name: Download latest Bedrock server
         run: |
           mkdir -p server
           cd server
