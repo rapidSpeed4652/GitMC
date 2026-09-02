@@ -6,20 +6,16 @@ on:
 permissions:
   contents: write
 
+env:
+  WORLD_RELEASE: bedrock-world-save
+  LEVEL_NAME: GitMC World
+
 jobs:
   server:
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
     steps:
-      # ─────────────────────────────────────────────
-      # Configuration
-      # ─────────────────────────────────────────────
-      - name: Set configuration
-        run: |
-          echo "BDS_VERSION=1.26.44.3" >> "$GITHUB_ENV"
-          echo "WORLD_RELEASE=bedrock-world-save" >> "$GITHUB_ENV"
-
       # ─────────────────────────────────────────────
       # Install dependencies
       # ─────────────────────────────────────────────
@@ -70,82 +66,123 @@ jobs:
           echo "Playit configured."
 
       # ─────────────────────────────────────────────
-      # Download pinned Bedrock server
+      # Download LATEST Bedrock server
       # ─────────────────────────────────────────────
-      - name: Download Bedrock server
+      - name: Download latest Bedrock server
         run: |
           mkdir -p server
           cd server
 
-          BDS_URL="https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-${BDS_VERSION}.zip"
+          echo "Downloading the latest official Bedrock Dedicated Server..."
 
-          echo "Downloading Bedrock Dedicated Server ${BDS_VERSION}..."
-          echo "$BDS_URL"
+          wget \
+            --retry-connrefused \
+            --tries=5 \
+            --timeout=30 \
+            -O bedrock.zip \
+            https://aka.ms/MinecraftBDS
 
-          wget --retry-connrefused \
-               --tries=5 \
-               --timeout=30 \
-               -O bedrock.zip \
-               "$BDS_URL"
+          echo "Downloaded:"
+          ls -lh bedrock.zip
 
-          echo "Extracting Bedrock server..."
+          echo "Extracting..."
 
           unzip -q bedrock.zip
           rm bedrock.zip
 
           chmod +x bedrock_server
 
-          echo "Bedrock server installed."
+          echo "Bedrock Dedicated Server installed."
 
       # ─────────────────────────────────────────────
-      # Restore Bedrock world
+      # Configure fixed world name
+      # ─────────────────────────────────────────────
+      - name: Configure world
+        run: |
+          cd server
+
+          if grep -q '^level-name=' server.properties; then
+            sed -i "s/^level-name=.*/level-name=${LEVEL_NAME}/" server.properties
+          else
+            echo "level-name=${LEVEL_NAME}" >> server.properties
+          fi
+
+          echo "Configured level-name:"
+          grep '^level-name=' server.properties
+
+      # ─────────────────────────────────────────────
+      # Create Bedrock worlds directory
+      # ─────────────────────────────────────────────
+      - name: Prepare world directory
+        run: |
+          mkdir -p "server/worlds/${LEVEL_NAME}"
+
+      # ─────────────────────────────────────────────
+      # Restore world
       # ─────────────────────────────────────────────
       - name: Restore world
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/world-save
+          mkdir -p /tmp/world-extracted
 
           echo "Checking for $WORLD_RELEASE release..."
 
           if gh release view "$WORLD_RELEASE" \
               --repo "${{ github.repository }}" >/dev/null 2>&1; then
 
-            echo "Downloading Bedrock world..."
+            echo "Found Bedrock world release."
 
             gh release download "$WORLD_RELEASE" \
               --repo "${{ github.repository }}" \
               --pattern "world.zip" \
               --dir /tmp/world-save
 
-            if [ -f /tmp/world-save/world.zip ]; then
-              echo "Extracting world..."
-
-              mkdir -p /tmp/world-save/extracted
-
-              unzip -q /tmp/world-save/world.zip \
-                -d /tmp/world-save/extracted
-
-              if [ -d "/tmp/world-save/extracted/world" ]; then
-                cp -a /tmp/world-save/extracted/world server/world
-
-              elif [ -d "/tmp/world-save/extracted/server/world" ]; then
-                cp -a /tmp/world-save/extracted/server/world server/world
-
-              else
-                echo "ERROR: world.zip does not contain a world directory."
-                exit 1
-              fi
-
-              echo "Bedrock world restored."
-
-            else
+            if [ ! -f /tmp/world-save/world.zip ]; then
               echo "No world.zip found in the release."
               echo "A new world will be generated."
+              exit 0
+            fi
+
+            echo "Extracting saved world..."
+
+            unzip -q /tmp/world-save/world.zip \
+              -d /tmp/world-extracted
+
+            # The ZIP contains:
+            #
+            # world/
+            #   level.dat
+            #   db/
+            #   ...
+            #
+            # Copy its CONTENTS into:
+            #
+            # server/worlds/GitMC World/
+
+            if [ -d "/tmp/world-extracted/world" ]; then
+
+              rm -rf "server/worlds/${LEVEL_NAME}"
+
+              mkdir -p "server/worlds/${LEVEL_NAME}"
+
+              cp -a \
+                /tmp/world-extracted/world/. \
+                "server/worlds/${LEVEL_NAME}/"
+
+              echo "World restored successfully."
+
+            else
+              echo "ERROR: world.zip does not contain a world/ directory."
+              echo
+              echo "Archive contents:"
+              find /tmp/world-extracted -maxdepth 3 -type f | head -50
+              exit 1
             fi
 
           else
-            echo "No $WORLD_RELEASE release exists yet."
+            echo "No $WORLD_RELEASE release exists."
             echo "A new world will be generated."
           fi
 
@@ -159,18 +196,19 @@ jobs:
           echo "Starting Bedrock Dedicated Server..."
 
           tmux new-session -d -s minecraft \
-            "LD_LIBRARY_PATH=. ./bedrock_server | tee server.log"
+            "LD_LIBRARY_PATH=. ./bedrock_server 2>&1 | tee server.log"
 
-          echo "Waiting for Bedrock server to start..."
+          echo "Waiting for server to start..."
 
           for i in {1..60}; do
+
             if grep -q "Server started" server.log 2>/dev/null; then
               echo "Bedrock server started!"
               break
             fi
 
             if ! tmux has-session -t minecraft 2>/dev/null; then
-              echo "ERROR: Bedrock server stopped unexpectedly."
+              echo "ERROR: Bedrock server stopped."
               echo
               cat server.log 2>/dev/null || true
               exit 1
@@ -179,17 +217,10 @@ jobs:
             sleep 2
           done
 
-          if ! grep -q "Server started" server.log 2>/dev/null; then
-            echo "WARNING: Could not find 'Server started' in the log."
-            echo "Checking whether the server is still running..."
-
-            if ! tmux has-session -t minecraft 2>/dev/null; then
-              echo "ERROR: Bedrock server is not running."
-              cat server.log 2>/dev/null || true
-              exit 1
-            fi
-
-            echo "Server is running."
+          if ! tmux has-session -t minecraft 2>/dev/null; then
+            echo "ERROR: Bedrock server is not running."
+            cat server.log 2>/dev/null || true
+            exit 1
           fi
 
       # ─────────────────────────────────────────────
@@ -206,6 +237,7 @@ jobs:
             > /tmp/playit.log 2>&1 &
 
           PLAYIT_PID=$!
+
           echo "$PLAYIT_PID" > /tmp/playit.pid
 
           sleep 10
@@ -215,8 +247,6 @@ jobs:
           cat /tmp/playit.log
           echo "============================"
           echo
-
-          echo "Playit agent started."
 
       # ─────────────────────────────────────────────
       # Run server
@@ -228,10 +258,11 @@ jobs:
           echo "Minecraft Bedrock server is running!"
           echo "=============================================="
           echo
-          echo "Bedrock UDP port: 19132"
+          echo "World:"
+          echo "$LEVEL_NAME"
           echo
-          echo "Your Playit public address should appear"
-          echo "in the Playit output/dashboard."
+          echo "Local Bedrock port:"
+          echo "UDP 19132"
           echo
           echo "=============================================="
 
@@ -252,22 +283,26 @@ jobs:
         if: always()
         run: |
           if tmux has-session -t minecraft 2>/dev/null; then
+
             echo "Stopping Minecraft..."
 
             tmux send-keys -t minecraft "stop" Enter
 
             for i in {1..30}; do
+
               if ! tmux has-session -t minecraft 2>/dev/null; then
                 break
               fi
 
               sleep 2
+
             done
 
             if tmux has-session -t minecraft 2>/dev/null; then
               echo "Server did not stop normally."
               tmux kill-session -t minecraft
             fi
+
           fi
 
       # ─────────────────────────────────────────────
@@ -283,47 +318,61 @@ jobs:
           sudo systemctl stop playit 2>/dev/null || true
 
       # ─────────────────────────────────────────────
-      # Save Bedrock world
+      # Save world
       # ─────────────────────────────────────────────
       - name: Save world
         if: always()
         run: |
-          if [ ! -d server/world ]; then
-            echo "No world directory found."
-            exit 0
+          WORLD_PATH="server/worlds/${LEVEL_NAME}"
+
+          if [ ! -d "$WORLD_PATH" ]; then
+            echo "ERROR: World directory does not exist:"
+            echo "$WORLD_PATH"
+            exit 1
           fi
 
-          echo "Creating Bedrock world save..."
+          echo "Saving Bedrock world..."
 
-          cd server
+          rm -rf /tmp/world-package
+          mkdir -p /tmp/world-package
+
+          cp -a "$WORLD_PATH" /tmp/world-package/world
+
+          cd /tmp/world-package
 
           zip -qr /tmp/world.zip world
 
-          echo "Bedrock world save created."
+          echo
+          echo "World archive created:"
+          ls -lh /tmp/world.zip
+
+          echo "Archive contents:"
+          unzip -l /tmp/world.zip | head -30
 
       # ─────────────────────────────────────────────
-      # Upload Bedrock world
+      # Upload world to Bedrock Release
       # ─────────────────────────────────────────────
-      - name: Upload world save
+      - name: Upload Bedrock world save
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ ! -f /tmp/world.zip ]; then
-            echo "No world.zip to upload."
+            echo "No world.zip found."
             exit 0
           fi
 
           if ! gh release view "$WORLD_RELEASE" \
               --repo "${{ github.repository }}" >/dev/null 2>&1; then
 
-            echo "Creating $WORLD_RELEASE release..."
+            echo "Creating Bedrock world release..."
 
             gh release create "$WORLD_RELEASE" \
               --repo "${{ github.repository }}" \
               --title "Minecraft Bedrock World Save" \
               --notes "Automatically updated Minecraft Bedrock world save." \
               --target "${{ github.sha }}"
+
           fi
 
           echo "Uploading Bedrock world..."
@@ -333,4 +382,8 @@ jobs:
             --repo "${{ github.repository }}" \
             --clobber
 
-          echo "Bedrock world saved successfully."
+          echo
+          echo "=============================================="
+          echo "Bedrock world saved successfully!"
+          echo "Release: $WORLD_RELEASE"
+          echo "=============================================="
