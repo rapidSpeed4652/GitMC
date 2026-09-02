@@ -70,87 +70,32 @@ jobs:
       # Download latest official Bedrock server
       # ─────────────────────────────────────────────
 
-      - name: Download latest Bedrock server
+            - name: Download latest Bedrock server
         run: |
           mkdir -p server
           cd server
 
-          echo "Fetching official Minecraft Bedrock download page..."
-
-          wget \
-            --timeout=30 \
-            --tries=5 \
-            --waitretry=5 \
-            --user-agent="Mozilla/5.0" \
-            -O minecraft.html \
-            "https://www.minecraft.net/en-us/download/server/bedrock"
-
-          echo "Download page fetched."
-
-          echo
-          echo "Searching page data for Linux Bedrock server..."
-
-          # Minecraft's current page stores the download information
-          # inside its page/application data rather than exposing the
-          # ZIP URL as a normal HTML link.
-
-          DOWNLOAD_URL=$(grep -oE \
-            'https://www\.minecraft\.net/bedrockdedicatedserver/bin-linux/[^"\\ ]+\.zip' \
-            minecraft.html \
-            | head -n 1)
-
-          # Some versions of the page escape URLs.
-          if [ -z "$DOWNLOAD_URL" ]; then
-            DOWNLOAD_URL=$(grep -oE \
-              'https:\\?/\\?/www\.minecraft\.net\\?/bedrockdedicatedserver\\?/bin-linux\\?/[^"\\ ]+\.zip' \
-              minecraft.html \
-              | head -n 1 \
-              | sed 's#\\/#/#g')
-          fi
-
-          if [ -z "$DOWNLOAD_URL" ]; then
-            echo
-            echo "ERROR: Minecraft did not expose the Linux download URL."
-            echo
-            echo "Searching for Bedrock server references..."
-            grep -oiE \
-              '.{0,100}bedrockdedicatedserver.{0,200}' \
-              minecraft.html \
-              | head -20 || true
-            exit 1
-          fi
-
-          echo
-          echo "Found official Bedrock server:"
-          echo "$DOWNLOAD_URL"
-          echo
-
-          echo "Downloading..."
+          echo "Downloading latest official Bedrock Dedicated Server..."
 
           wget \
             --timeout=60 \
-            --tries=5 \
+            --tries=10 \
             --waitretry=5 \
             --retry-connrefused \
-            --user-agent="Mozilla/5.0" \
             -O bedrock.zip \
-            "$DOWNLOAD_URL"
+            "https://aka.ms/MinecraftBDS"
 
-          echo
           echo "Downloaded:"
           ls -lh bedrock.zip
 
-          echo
           echo "Extracting..."
 
           unzip -q bedrock.zip
-
-          rm -f bedrock.zip minecraft.html
+          rm bedrock.zip
 
           chmod +x bedrock_server
 
-          echo
-          echo "Bedrock Dedicated Server installed."
+          echo "Bedrock server installed successfully."
 
       # ─────────────────────────────────────────────
       # Configure world
