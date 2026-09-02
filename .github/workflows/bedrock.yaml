@@ -73,26 +73,57 @@ jobs:
           mkdir -p server
           cd server
 
-          echo "Downloading the latest official Bedrock Dedicated Server..."
+          echo "Fetching official Minecraft Bedrock download page..."
+
+          curl -fsSL \
+            https://www.minecraft.net/en-us/download/server/bedrock \
+            -o download.html
+
+          echo "Finding latest Linux Bedrock Dedicated Server..."
+
+          DOWNLOAD_URL=$(grep -oE \
+            'https://www\.minecraft\.net/bedrockdedicatedserver/bin-linux/bedrock-server-[^"]+\.zip' \
+            download.html \
+            | head -n 1)
+
+          if [ -z "$DOWNLOAD_URL" ]; then
+            echo "ERROR: Could not find the Bedrock server download URL."
+            echo
+            echo "Relevant page contents:"
+            grep -oE \
+              'https://[^"]*bedrock-server-[^"]+\.zip' \
+              download.html \
+              | head -20 || true
+            exit 1
+          fi
+
+          echo "Found:"
+          echo "$DOWNLOAD_URL"
+
+          echo
+          echo "Downloading..."
 
           wget \
             --retry-connrefused \
             --tries=5 \
             --timeout=30 \
             -O bedrock.zip \
-            https://aka.ms/MinecraftBDS
+            "$DOWNLOAD_URL"
 
+          echo
           echo "Downloaded:"
           ls -lh bedrock.zip
 
           echo "Extracting..."
 
           unzip -q bedrock.zip
-          rm bedrock.zip
+          rm bedrock.zip download.html
 
           chmod +x bedrock_server
 
-          echo "Bedrock Dedicated Server installed."
+          echo
+          echo "Bedrock Dedicated Server installed:"
+          ls -lh bedrock_server
 
       # ─────────────────────────────────────────────
       # Configure fixed world name
