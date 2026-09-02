@@ -78,7 +78,7 @@ jobs:
             "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.26.45.1.zip"
 
           echo "Downloaded:"
-          ls -lh bedrock-server-1.26.45.1.zip
+          ls -lh bedrock.zip
 
           echo "Extracting..."
 
