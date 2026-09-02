@@ -38,34 +38,26 @@ jobs:
 
       - name: Install Playit
         run: |
-          curl -SsL https://playit-cloud.github.io/ppa/key.gpg \
-            | gpg --dearmor \
-            | sudo tee /etc/apt/trusted.gpg.d/playit.gpg >/dev/null
+          sudo rm -f /etc/apt/sources.list.d/playit-cloud.list
+          sudo rm -f /etc/apt/sources.list.d/playit.list
+          sudo rm -f /etc/apt/trusted.gpg.d/playit.gpg
+          sudo rm -f /usr/share/keyrings/playit.gpg
 
-          echo "deb [signed-by=/etc/apt/trusted.gpg.d/playit.gpg] https://playit-cloud.github.io/ppa/data ./" \
-            | sudo tee /etc/apt/sources.list.d/playit-cloud.list
+          curl -fsSL https://packages.playit.gg/keys/playit.gpg \
+            | gpg --dearmor \
+            | sudo tee /usr/share/keyrings/playit.gpg >/dev/null
+
+          sudo chmod 0644 /usr/share/keyrings/playit.gpg
+
+          curl -fsSL \
+            -o /tmp/playit-debian.list \
+            https://packages.playit.gg/repo-files/playit-debian.list
+
+          sudo mv /tmp/playit-debian.list \
+            /etc/apt/sources.list.d/playit.list
 
           sudo apt-get update
           sudo apt-get install -y playit
-
-      - name: Configure Playit
-        env:
-          PLAYIT_SECRET: ${{ secrets.PLAYIT_SECRET }}
-        run: |
-          if [ -z "$PLAYIT_SECRET" ]; then
-            echo "ERROR: PLAYIT_SECRET is not configured."
-            exit 1
-          fi
-
-          sudo mkdir -p /etc/playit
-
-          printf 'secret_key = "%s"\n' "$PLAYIT_SECRET" \
-            | sudo tee /etc/playit/playit.toml >/dev/null
-
-          sudo chmod 600 /etc/playit/playit.toml
-
-          echo "Playit configured."
-
       # ─────────────────────────────────────────────
       # Download latest official Bedrock server
       # ─────────────────────────────────────────────
