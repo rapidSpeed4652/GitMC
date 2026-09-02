@@ -68,6 +68,7 @@ jobs:
       # ─────────────────────────────────────────────
       # Download LATEST Bedrock server
       # ─────────────────────────────────────────────
+      
       - name: Download latest Bedrock server
         run: |
           mkdir -p server
@@ -75,46 +76,68 @@ jobs:
 
           echo "Fetching official Minecraft Bedrock download page..."
 
-          curl --http1.1 \
-            --retry 5 \
-            --retry-delay 3 \
-            --retry-all-errors \
-            -fsSL \
-            https://www.minecraft.net/en-us/download/server/bedrock \
-            -o download.html
+          rm -f download.html
 
-          echo "Finding latest Linux Bedrock Dedicated Server..."
+          wget \
+            --timeout=30 \
+            --tries=5 \
+            --waitretry=5 \
+            --retry-on-http-error=429,500,502,503,504 \
+            --user-agent="Mozilla/5.0" \
+            -O download.html \
+            "https://www.minecraft.net/en-us/download/server/bedrock"
+
+          echo "Download page fetched successfully."
+
+          echo "Finding Linux Bedrock Dedicated Server URL..."
 
           DOWNLOAD_URL=$(grep -oE \
-            'https://www\.minecraft\.net/bedrockdedicatedserver/bin-linux/bedrock-server-[^"]+\.zip' \
+            'https://[^"]*bedrock-server-[^"]+\.zip' \
             download.html \
+            | grep -i 'bin-linux' \
             | head -n 1)
 
           if [ -z "$DOWNLOAD_URL" ]; then
-            echo "ERROR: Could not find the Bedrock server download URL."
+            echo "ERROR: Could not find the Linux Bedrock server download URL."
+            echo
+            echo "URLs found on the page:"
+            grep -oE \
+              'https://[^"]+\.zip' \
+              download.html \
+              | head -20 || true
             exit 1
           fi
 
-          echo "Found:"
+          echo
+          echo "Found Bedrock server:"
           echo "$DOWNLOAD_URL"
+          echo
 
-          echo "Downloading Bedrock server..."
+          echo "Downloading Bedrock Dedicated Server..."
 
           wget \
-            --retry-connrefused \
-            --tries=5 \
             --timeout=30 \
+            --tries=5 \
+            --waitretry=5 \
+            --retry-on-http-error=429,500,502,503,504 \
+            --user-agent="Mozilla/5.0" \
             -O bedrock.zip \
             "$DOWNLOAD_URL"
+
+          echo
+          echo "Downloaded:"
+          ls -lh bedrock.zip
 
           echo "Extracting..."
 
           unzip -q bedrock.zip
-          rm bedrock.zip download.html
+          rm -f bedrock.zip download.html
 
           chmod +x bedrock_server
 
-          echo "Bedrock server installed successfully."
+          echo
+          echo "Bedrock Dedicated Server installed successfully."
+          ls -lh bedrock_server
 
       # ─────────────────────────────────────────────
       # Configure fixed world name
