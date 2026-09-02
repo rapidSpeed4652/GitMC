@@ -90,8 +90,8 @@ jobs:
 
           echo "Extracting..."
 
-          unzip -q bedrock-server-1.26.45.1.zip
-          rm bedrock-server-1.26.45.1.zip
+          unzip -q bedrock.zip
+          rm bedrock.zip
 
           chmod +x bedrock_server
 
