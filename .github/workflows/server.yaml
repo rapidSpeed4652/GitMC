@@ -1,7 +1,11 @@
+```yaml
 name: Minecraft Server
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   server:
@@ -9,30 +13,49 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      # ─────────────────────────────────────────────
+      # Install Java
+      # ─────────────────────────────────────────────
       - name: Install Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '25'
 
+      # ─────────────────────────────────────────────
+      # Download Paper
+      # ─────────────────────────────────────────────
       - name: Download Paper 26.2
         run: |
           mkdir -p server
-          DOWNLOAD_URL=$(curl -s -H "User-Agent: minecraft-server/1.0" \
-            "https://fill.papermc.io/v3/projects/paper/versions/26.2/builds" | \
-            jq -r 'first(.[] | select(.channel == "STABLE") | .downloads."server:default".url)')
-          echo "Downloading: $DOWNLOAD_URL"
-          wget -O server/paper.jar "$DOWNLOAD_URL"
-          ls -la server/
 
+          DOWNLOAD_URL=$(curl -s \
+            -H "User-Agent: minecraft-server/1.0" \
+            "https://fill.papermc.io/v3/projects/paper/versions/26.2/builds" |
+            jq -r 'first(.[] | select(.channel == "STABLE") | .downloads."server:default".url)')
+
+          echo "Downloading: $DOWNLOAD_URL"
+
+          wget -O server/paper.jar "$DOWNLOAD_URL"
+
+          ls -lh server/paper.jar
+
+      # ─────────────────────────────────────────────
+      # Install bore
+      # ─────────────────────────────────────────────
       - name: Install bore
         run: |
           wget -O bore.tar.gz \
             "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz"
+
           tar xzf bore.tar.gz
           chmod +x bore
-          ./bore --version  
 
+          ./bore --version
+
+      # ─────────────────────────────────────────────
+      # Restore previous world
+      # ─────────────────────────────────────────────
       - name: Restore previous world
         env:
           GH_TOKEN: ${{ github.token }}
@@ -48,70 +71,117 @@ jobs:
 
             echo "Previous world found."
 
-            rm -rf world
+            rm -rf server/world
 
-            unzip -q /tmp/world-save/world.zip
+            unzip -q /tmp/world-save/world.zip -d /tmp/world-save/extracted
 
-            if [ -d "world/world" ]; then
-              mv world/world/* world/ 2>/dev/null || true
-              mv world/world/.* world/ 2>/dev/null || true
-              rmdir world/world 2>/dev/null || true
+            # Handle both:
+            #   world/...
+            # and
+            #   server/world/...
+            if [ -d "/tmp/world-save/extracted/world" ]; then
+              mv /tmp/world-save/extracted/world server/world
+            elif [ -d "/tmp/world-save/extracted/server/world" ]; then
+              mv /tmp/world-save/extracted/server/world server/world
+            else
+              echo "ERROR: Could not find a world directory in the backup."
+              find /tmp/world-save/extracted -maxdepth 3 -type d
+              exit 1
             fi
 
             echo "World restored successfully."
 
+            ls -la server/world
+
           else
             echo "No previous world save found."
-            echo "A new world will be created."
+            echo "Minecraft will create a new world."
           fi
 
+      # ─────────────────────────────────────────────
+      # Start Minecraft
+      # ─────────────────────────────────────────────
       - name: Start Minecraft server
         working-directory: server
         run: |
           echo "eula=true" > eula.txt
-          java -Xms1G -Xmx4G \
-            -jar paper.jar nogui \
-            > server.log 2>&1 &
+
+          echo "Starting Minecraft..."
+
+          nohup java \
+            -Xms1G \
+            -Xmx4G \
+            -jar paper.jar \
+            nogui \
+            > server.log 2>&1 < server-input.txt &
+
           echo $! > server.pid
 
+          echo "Minecraft PID: $(cat server.pid)"
+
+      # ─────────────────────────────────────────────
+      # Wait for Minecraft
+      # ─────────────────────────────────────────────
       - name: Wait for Minecraft server
         working-directory: server
         run: |
+          echo "Waiting for Minecraft to start..."
+
           for i in {1..120}; do
+
             if grep -q "Done (" server.log; then
               echo "Minecraft server is ready!"
-              break
+              exit 0
             fi
-            # Check if the process died
-            if ! kill -0 $(cat server.pid) 2>/dev/null; then
-              echo "Server process died!"
+
+            PID=$(cat server.pid)
+
+            if ! kill -0 "$PID" 2>/dev/null; then
+              echo "Minecraft server died during startup."
+              echo ""
+              echo "===== SERVER LOG ====="
               cat server.log
               exit 1
             fi
+
             sleep 2
           done
 
-          if ! grep -q "Done (" server.log; then
-            echo "Minecraft server failed to start (timeout)."
-            cat server.log
-            exit 1
-          fi   
+          echo "Minecraft failed to start within 4 minutes."
+          echo ""
+          echo "===== SERVER LOG ====="
+          cat server.log
 
+          exit 1
+
+      # ─────────────────────────────────────────────
+      # Start bore tunnel
+      # ─────────────────────────────────────────────
       - name: Start bore tunnel
         run: |
-          ./bore local 25565 --to bore.pub > bore.log 2>&1 &
+          ./bore local 25565 --to bore.pub \
+            > bore.log 2>&1 &
+
           echo $! > bore.pid
 
+          echo "Waiting for bore tunnel..."
+
           for i in {1..30}; do
-            ADDR=$(grep -oP 'bore\.pub:\K[0-9]+' bore.log | head -n1 || true)
+
+            ADDR=$(grep -oP 'bore\.pub:\K[0-9]+' bore.log |
+              head -n1 || true)
+
             if [ -n "$ADDR" ]; then
               break
             fi
+
             sleep 2
           done
 
           if [ -z "$ADDR" ]; then
             echo "Bore tunnel failed to start."
+            echo ""
+            echo "===== BORE LOG ====="
             cat bore.log
             exit 1
           fi
@@ -121,10 +191,13 @@ jobs:
           echo "       MINECRAFT SERVER ADDRESS"
           echo "=========================================="
           echo ""
-          echo "bore.pub:${ADDR}"
+          echo "bore.pub:$ADDR"
           echo ""
           echo "=========================================="
 
+      # ─────────────────────────────────────────────
+      # Keep workflow alive
+      # ─────────────────────────────────────────────
       - name: Run server
         run: |
           echo "Minecraft server is now running."
@@ -132,45 +205,99 @@ jobs:
 
           while true; do
 
-            if ! tmux has-session -t minecraft 2>/dev/null; then
-              echo "Minecraft server stopped unexpectedly."
+            if [ -f server/server.pid ]; then
+              PID=$(cat server/server.pid)
+
+              if ! kill -0 "$PID" 2>/dev/null; then
+                echo "Minecraft server stopped unexpectedly."
+                echo ""
+                echo "===== SERVER LOG ====="
+                cat server/server.log
+                exit 1
+              fi
+            else
+              echo "Minecraft PID file disappeared."
               exit 1
             fi
 
             echo "[$(date '+%H:%M:%S')] Server running..."
 
             sleep 30
-
           done
 
+      # ─────────────────────────────────────────────
+      # Stop Minecraft
+      # Runs when workflow is cancelled/fails
+      # ─────────────────────────────────────────────
       - name: Stop Minecraft server
         if: always()
+        working-directory: server
         run: |
           echo "Stopping Minecraft server..."
 
-          if tmux has-session -t minecraft 2>/dev/null; then
-
-            echo "Sending stop command..."
-            tmux send-keys -t minecraft "stop" Enter
-
-            echo "Waiting for Minecraft to save the world..."
-            sleep 20
-
-            if tmux has-session -t minecraft 2>/dev/null; then
-              echo "Minecraft did not exit normally."
-              tmux kill-session -t minecraft || true
-            else
-              echo "Minecraft shut down cleanly."
-            fi
-
-          else
-            echo "Minecraft process is already stopped."
+          if [ ! -f server.pid ]; then
+            echo "No Minecraft PID file found."
+            exit 0
           fi
 
+          PID=$(cat server.pid)
+
+          if ! kill -0 "$PID" 2>/dev/null; then
+            echo "Minecraft process is already stopped."
+            exit 0
+          fi
+
+          echo "Sending stop command to Minecraft (PID $PID)..."
+
+          # Send "stop" to Minecraft's stdin
+          printf "stop\n" > server-input.txt
+
+          echo "Waiting for Minecraft to save the world..."
+
+          for i in {1..30}; do
+
+            if ! kill -0 "$PID" 2>/dev/null; then
+              echo "Minecraft shut down cleanly."
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          echo "Minecraft did not stop within 60 seconds."
+          echo "Sending SIGTERM..."
+
+          kill "$PID" 2>/dev/null || true
+
+          sleep 5
+
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "Minecraft still running. Force stopping..."
+            kill -9 "$PID" 2>/dev/null || true
+          fi
+
+      # ─────────────────────────────────────────────
+      # Stop bore
+      # ─────────────────────────────────────────────
+      - name: Stop bore
+        if: always()
+        run: |
+          if [ -f bore.pid ]; then
+            PID=$(cat bore.pid)
+
+            if kill -0 "$PID" 2>/dev/null; then
+              echo "Stopping bore tunnel..."
+              kill "$PID" 2>/dev/null || true
+            fi
+          fi
+
+      # ─────────────────────────────────────────────
+      # Create world backup
+      # ─────────────────────────────────────────────
       - name: Create world backup
         if: always()
         run: |
-          if [ ! -d "world" ]; then
+          if [ ! -d "server/world" ]; then
             echo "No world directory found."
             exit 0
           fi
@@ -179,12 +306,19 @@ jobs:
 
           rm -f /tmp/world.zip
 
+          cd server
+
           zip -r -q /tmp/world.zip world
 
-          echo
+          cd ..
+
+          echo ""
           echo "World backup created:"
           ls -lh /tmp/world.zip
 
+      # ─────────────────────────────────────────────
+      # Upload world backup
+      # ─────────────────────────────────────────────
       - name: Upload world backup
         if: always()
         env:
