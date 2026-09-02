@@ -372,11 +372,40 @@ jobs:
             exit 0
           fi
 
-          echo "Uploading world..."
+          echo "World backup found:"
+          ls -lh /tmp/world.zip
+
+          echo "Checking for world-save release..."
+
+          if gh release view world-save \
+              --repo "${{ github.repository }}" \
+              >/dev/null 2>&1; then
+
+            echo "world-save release already exists."
+
+          else
+
+            echo "world-save release does not exist."
+            echo "Creating it..."
+
+            gh release create world-save \
+              --repo "${{ github.repository }}" \
+              --title "Minecraft World Save" \
+              --notes "Automatically updated Minecraft world save." \
+              --target "${{ github.sha }}"
+
+          fi
+
+          echo "Uploading world.zip..."
 
           gh release upload world-save \
             /tmp/world.zip \
             --repo "${{ github.repository }}" \
             --clobber
 
-          echo "World save uploaded successfully."
+          echo ""
+          echo "=========================================="
+          echo "       WORLD SAVE UPLOADED"
+          echo "=========================================="
+          echo ""
+          echo "world.zip successfully uploaded."
