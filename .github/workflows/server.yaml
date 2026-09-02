@@ -12,6 +12,7 @@ jobs:
     timeout-minutes: 360
 
     steps:
+
       # ─────────────────────────────────────────────
       # Install Java
       # ─────────────────────────────────────────────
@@ -20,6 +21,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
+
+      # ─────────────────────────────────────────────
+      # Install tmux
+      # ─────────────────────────────────────────────
+      - name: Install tmux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux
 
       # ─────────────────────────────────────────────
       # Download Paper
@@ -33,10 +42,16 @@ jobs:
             "https://fill.papermc.io/v3/projects/paper/versions/26.2/builds" |
             jq -r 'first(.[] | select(.channel == "STABLE") | .downloads."server:default".url)')
 
+          if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" = "null" ]; then
+            echo "Could not find a stable Paper 26.2 build."
+            exit 1
+          fi
+
           echo "Downloading: $DOWNLOAD_URL"
 
           wget -O server/paper.jar "$DOWNLOAD_URL"
 
+          echo "Paper downloaded:"
           ls -lh server/paper.jar
 
       # ─────────────────────────────────────────────
@@ -53,7 +68,7 @@ jobs:
           ./bore --version
 
       # ─────────────────────────────────────────────
-      # Restore previous world
+      # Restore world
       # ─────────────────────────────────────────────
       - name: Restore previous world
         env:
@@ -72,19 +87,31 @@ jobs:
 
             rm -rf server/world
 
-            unzip -q /tmp/world-save/world.zip -d /tmp/world-save/extracted
+            mkdir -p /tmp/world-save/extracted
 
-            # Handle both:
-            #   world/...
-            # and
-            #   server/world/...
+            unzip -q \
+              /tmp/world-save/world.zip \
+              -d /tmp/world-save/extracted
+
             if [ -d "/tmp/world-save/extracted/world" ]; then
-              mv /tmp/world-save/extracted/world server/world
+
+              mv \
+                /tmp/world-save/extracted/world \
+                server/world
+
             elif [ -d "/tmp/world-save/extracted/server/world" ]; then
-              mv /tmp/world-save/extracted/server/world server/world
+
+              mv \
+                /tmp/world-save/extracted/server/world \
+                server/world
+
             else
-              echo "ERROR: Could not find a world directory in the backup."
-              find /tmp/world-save/extracted -maxdepth 3 -type d
+
+              echo "ERROR: No world directory found in world.zip."
+
+              echo "Contents of backup:"
+              find /tmp/world-save/extracted -maxdepth 3 -print
+
               exit 1
             fi
 
@@ -93,8 +120,10 @@ jobs:
             ls -la server/world
 
           else
+
             echo "No previous world save found."
             echo "Minecraft will create a new world."
+
           fi
 
       # ─────────────────────────────────────────────
@@ -105,18 +134,27 @@ jobs:
         run: |
           echo "eula=true" > eula.txt
 
-          echo "Starting Minecraft..."
+          echo "Starting Minecraft server..."
 
-          nohup java \
-            -Xms1G \
-            -Xmx4G \
-            -jar paper.jar \
-            nogui \
-            > server.log 2>&1 < server-input.txt &
+          tmux new-session -d \
+            -s minecraft \
+            "java -Xms1G -Xmx4G -jar paper.jar nogui 2>&1 | tee server.log"
 
-          echo $! > server.pid
+          sleep 2
 
-          echo "Minecraft PID: $(cat server.pid)"
+          if ! tmux has-session -t minecraft 2>/dev/null; then
+            echo "Minecraft failed to start."
+
+            if [ -f server.log ]; then
+              echo ""
+              echo "===== SERVER LOG ====="
+              cat server.log
+            fi
+
+            exit 1
+          fi
+
+          echo "Minecraft process started."
 
       # ─────────────────────────────────────────────
       # Wait for Minecraft
@@ -124,28 +162,37 @@ jobs:
       - name: Wait for Minecraft server
         working-directory: server
         run: |
-          echo "Waiting for Minecraft to start..."
+          echo "Waiting for Minecraft to finish starting..."
 
           for i in {1..120}; do
 
-            if grep -q "Done (" server.log; then
+            if grep -q "Done (" server.log 2>/dev/null; then
+              echo ""
               echo "Minecraft server is ready!"
               exit 0
             fi
 
-            PID=$(cat server.pid)
+            if ! tmux has-session -t minecraft 2>/dev/null; then
 
-            if ! kill -0 "$PID" 2>/dev/null; then
-              echo "Minecraft server died during startup."
+              echo ""
+              echo "Minecraft server stopped during startup."
               echo ""
               echo "===== SERVER LOG ====="
-              cat server.log
+
+              if [ -f server.log ]; then
+                cat server.log
+              else
+                echo "server.log does not exist."
+              fi
+
               exit 1
             fi
 
             sleep 2
+
           done
 
+          echo ""
           echo "Minecraft failed to start within 4 minutes."
           echo ""
           echo "===== SERVER LOG ====="
@@ -175,6 +222,7 @@ jobs:
             fi
 
             sleep 2
+
           done
 
           if [ -z "$ADDR" ]; then
@@ -204,75 +252,69 @@ jobs:
 
           while true; do
 
-            if [ -f server/server.pid ]; then
-              PID=$(cat server/server.pid)
+            if ! tmux has-session -t minecraft 2>/dev/null; then
 
-              if ! kill -0 "$PID" 2>/dev/null; then
-                echo "Minecraft server stopped unexpectedly."
+              echo ""
+              echo "Minecraft server stopped unexpectedly."
+
+              if [ -f server/server.log ]; then
                 echo ""
                 echo "===== SERVER LOG ====="
-                cat server/server.log
-                exit 1
+                tail -n 100 server/server.log
               fi
-            else
-              echo "Minecraft PID file disappeared."
+
               exit 1
             fi
 
             echo "[$(date '+%H:%M:%S')] Server running..."
 
             sleep 30
+
           done
 
       # ─────────────────────────────────────────────
       # Stop Minecraft
-      # Runs when workflow is cancelled/fails
       # ─────────────────────────────────────────────
       - name: Stop Minecraft server
         if: always()
-        working-directory: server
         run: |
           echo "Stopping Minecraft server..."
 
-          if [ ! -f server.pid ]; then
-            echo "No Minecraft PID file found."
-            exit 0
-          fi
+          if tmux has-session -t minecraft 2>/dev/null; then
 
-          PID=$(cat server.pid)
+            echo "Sending stop command..."
 
-          if ! kill -0 "$PID" 2>/dev/null; then
-            echo "Minecraft process is already stopped."
-            exit 0
-          fi
+            tmux send-keys \
+              -t minecraft \
+              "stop" \
+              Enter
 
-          echo "Sending stop command to Minecraft (PID $PID)..."
+            echo "Waiting for Minecraft to save the world..."
 
-          # Send "stop" to Minecraft's stdin
-          printf "stop\n" > server-input.txt
+            for i in {1..30}; do
 
-          echo "Waiting for Minecraft to save the world..."
+              if ! tmux has-session -t minecraft 2>/dev/null; then
+                echo "Minecraft shut down cleanly."
+                break
+              fi
 
-          for i in {1..30}; do
+              sleep 2
 
-            if ! kill -0 "$PID" 2>/dev/null; then
-              echo "Minecraft shut down cleanly."
-              exit 0
+            done
+
+            if tmux has-session -t minecraft 2>/dev/null; then
+
+              echo "Minecraft did not stop after 60 seconds."
+              echo "Force stopping tmux session..."
+
+              tmux kill-session -t minecraft || true
+
             fi
 
-            sleep 2
-          done
+          else
 
-          echo "Minecraft did not stop within 60 seconds."
-          echo "Sending SIGTERM..."
+            echo "Minecraft session is already stopped."
 
-          kill "$PID" 2>/dev/null || true
-
-          sleep 5
-
-          if kill -0 "$PID" 2>/dev/null; then
-            echo "Minecraft still running. Force stopping..."
-            kill -9 "$PID" 2>/dev/null || true
           fi
 
       # ─────────────────────────────────────────────
@@ -282,12 +324,14 @@ jobs:
         if: always()
         run: |
           if [ -f bore.pid ]; then
+
             PID=$(cat bore.pid)
 
             if kill -0 "$PID" 2>/dev/null; then
-              echo "Stopping bore tunnel..."
+              echo "Stopping bore..."
               kill "$PID" 2>/dev/null || true
             fi
+
           fi
 
       # ─────────────────────────────────────────────
