@@ -1,0 +1,66 @@
+name: Configure Playit
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Install Playit
+        run: |
+          curl -SsL https://playit-cloud.github.io/ppa/key.gpg \
+            | gpg --dearmor \
+            | sudo tee /etc/apt/trusted.gpg.d/playit.gpg >/dev/null
+
+          echo "deb [signed-by=/etc/apt/trusted.gpg.d/playit.gpg] https://playit-cloud.github.io/ppa/data ./" \
+            | sudo tee /etc/apt/sources.list.d/playit-cloud.list
+
+          sudo apt update
+          sudo apt install -y playit
+
+      - name: Generate Playit claim
+        run: |
+          CLAIM_CODE=$(playit claim generate)
+
+          echo "=============================================="
+          echo "PLAYIT CLAIM"
+          echo "=============================================="
+          echo
+          echo "Open this URL in your browser:"
+          playit claim url "$CLAIM_CODE"
+          echo
+          echo "Log into your Playit account and approve the agent."
+          echo
+          echo "Waiting for approval..."
+          echo "=============================================="
+
+          echo "$CLAIM_CODE" > claim_code.txt
+
+      - name: Exchange claim for secret
+        run: |
+          CLAIM_CODE=$(cat claim_code.txt)
+
+          echo "Waiting for Playit claim approval..."
+          echo
+
+          SECRET=$(playit claim exchange "$CLAIM_CODE" --wait 0)
+
+          echo
+          echo "=============================================="
+          echo "PLAYIT SECRET"
+          echo "=============================================="
+          echo
+          echo "$SECRET"
+          echo
+          echo "=============================================="
+          echo "Copy the secret above."
+          echo "Create a repository secret named:"
+          echo
+          echo "PLAYIT_SECRET"
+          echo
+          echo "GitHub → Settings → Secrets and variables"
+          echo "→ Actions → New repository secret"
+          echo "=============================================="
