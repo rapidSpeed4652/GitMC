@@ -31,7 +31,39 @@ jobs:
             "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz"
           tar xzf bore.tar.gz
           chmod +x bore
-          ./bore --version   
+          ./bore --version  
+
+      - name: Restore previous world
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Checking for previous world save..."
+
+          mkdir -p /tmp/world-save
+
+          if gh release download world-save \
+              --repo "${{ github.repository }}" \
+              --pattern "world.zip" \
+              --dir /tmp/world-save; then
+
+            echo "Previous world found."
+
+            rm -rf world
+
+            unzip -q /tmp/world-save/world.zip
+
+            if [ -d "world/world" ]; then
+              mv world/world/* world/ 2>/dev/null || true
+              mv world/world/.* world/ 2>/dev/null || true
+              rmdir world/world 2>/dev/null || true
+            fi
+
+            echo "World restored successfully."
+
+          else
+            echo "No previous world save found."
+            echo "A new world will be created."
+          fi
 
       - name: Start Minecraft server
         working-directory: server
@@ -93,10 +125,81 @@ jobs:
           echo ""
           echo "=========================================="
 
-      - name: Monitor server
-        working-directory: server
+      - name: Run server
         run: |
-          while kill -0 $(cat server.pid) 2>/dev/null; do
+          echo "Minecraft server is now running."
+          echo "Press 'Cancel workflow' to stop it."
+
+          while true; do
+
+            if ! tmux has-session -t minecraft 2>/dev/null; then
+              echo "Minecraft server stopped unexpectedly."
+              exit 1
+            fi
+
+            echo "[$(date '+%H:%M:%S')] Server running..."
+
             sleep 30
+
           done
-          echo "Minecraft server stopped."   
+
+      - name: Stop Minecraft server
+        if: always()
+        run: |
+          echo "Stopping Minecraft server..."
+
+          if tmux has-session -t minecraft 2>/dev/null; then
+
+            echo "Sending stop command..."
+            tmux send-keys -t minecraft "stop" Enter
+
+            echo "Waiting for Minecraft to save the world..."
+            sleep 20
+
+            if tmux has-session -t minecraft 2>/dev/null; then
+              echo "Minecraft did not exit normally."
+              tmux kill-session -t minecraft || true
+            else
+              echo "Minecraft shut down cleanly."
+            fi
+
+          else
+            echo "Minecraft process is already stopped."
+          fi
+
+      - name: Create world backup
+        if: always()
+        run: |
+          if [ ! -d "world" ]; then
+            echo "No world directory found."
+            exit 0
+          fi
+
+          echo "Creating world backup..."
+
+          rm -f /tmp/world.zip
+
+          zip -r -q /tmp/world.zip world
+
+          echo
+          echo "World backup created:"
+          ls -lh /tmp/world.zip
+
+      - name: Upload world backup
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -f /tmp/world.zip ]; then
+            echo "No world backup to upload."
+            exit 0
+          fi
+
+          echo "Uploading world..."
+
+          gh release upload world-save \
+            /tmp/world.zip \
+            --repo "${{ github.repository }}" \
+            --clobber
+
+          echo "World save uploaded successfully."
