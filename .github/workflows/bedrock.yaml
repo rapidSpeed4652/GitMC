@@ -83,15 +83,15 @@ jobs:
             --waitretry=5 \
             --retry-connrefused \
             -O bedrock.zip \
-            "https://aka.ms/MinecraftBDS"
+            "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.26.45.1.zip"
 
           echo "Downloaded:"
-          ls -lh bedrock.zip
+          ls -lh bedrock-server-1.26.45.1.zip
 
           echo "Extracting..."
 
-          unzip -q bedrock.zip
-          rm bedrock.zip
+          unzip -q bedrock-server-1.26.45.1.zip
+          rm bedrock-server-1.26.45.1.zip
 
           chmod +x bedrock_server
 
