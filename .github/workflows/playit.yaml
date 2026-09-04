@@ -44,9 +44,11 @@ jobs:
           CLAIM_CODE=$(cat claim_code.txt)
 
           echo "Waiting for Playit claim approval..."
+          echo "Approve the agent in your browser."
           echo
 
-          SECRET=$(playit claim exchange "$CLAIM_CODE" --wait 0)
+          # Wait for the claim to be approved.
+          SECRET=$(playit claim exchange "$CLAIM_CODE" --wait 300)
 
           echo
           echo "=============================================="
