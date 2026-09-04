@@ -21,9 +21,26 @@ jobs:
           sudo apt update
           sudo apt install -y playit
 
-      - name: Generate Playit claim
+          echo "Installed Playit:"
+          playit --version
+
+      - name: Start Playit
         run: |
-          CLAIM_CODE=$(playit claim generate)
+          sudo systemctl start playit
+
+          echo "Playit service started."
+          sleep 5
+
+          sudo systemctl status playit --no-pager || true
+
+      - name: Generate claim
+        run: |
+          echo "Generating Playit claim..."
+          echo
+
+          playit claim generate > claim_code.txt
+
+          CLAIM_CODE=$(cat claim_code.txt)
 
           echo "=============================================="
           echo "PLAYIT CLAIM"
@@ -32,23 +49,32 @@ jobs:
           echo "Open this URL in your browser:"
           playit claim url "$CLAIM_CODE"
           echo
-          echo "Log into your Playit account and approve the agent."
+          echo "Approve the agent in your Playit account."
           echo
-          echo "Waiting for approval..."
+          echo "The workflow will remain running while you do this."
           echo "=============================================="
 
-          echo "$CLAIM_CODE" > claim_code.txt
-
-      - name: Exchange claim for secret
+      - name: Wait for claim
         run: |
           CLAIM_CODE=$(cat claim_code.txt)
 
-          echo "Waiting for Playit claim approval..."
-          echo "Approve the agent in your browser."
+          echo "Waiting for Playit approval..."
+          echo "Do NOT stop this workflow."
           echo
 
-          # Wait for the claim to be approved.
-          SECRET=$(playit claim exchange "$CLAIM_CODE" --wait 300)
+          while true; do
+            echo "Checking claim..."
+
+            if SECRET=$(playit claim exchange "$CLAIM_CODE" --wait 10 2>/tmp/playit_claim_error); then
+              if [ -n "$SECRET" ]; then
+                break
+              fi
+            fi
+
+            cat /tmp/playit_claim_error || true
+            echo "Not approved yet. Waiting 10 seconds..."
+            sleep 10
+          done
 
           echo
           echo "=============================================="
@@ -59,10 +85,16 @@ jobs:
           echo
           echo "=============================================="
           echo "Copy the secret above."
-          echo "Create a repository secret named:"
           echo
+          echo "Create a repository secret named:"
           echo "PLAYIT_SECRET"
           echo
           echo "GitHub → Settings → Secrets and variables"
           echo "→ Actions → New repository secret"
           echo "=============================================="
+
+      - name: Keep agent alive briefly
+        run: |
+          echo "Claim completed."
+          echo "Keeping the runner alive for 30 seconds..."
+          sleep 30
