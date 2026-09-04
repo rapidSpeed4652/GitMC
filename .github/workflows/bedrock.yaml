@@ -58,6 +58,24 @@ jobs:
 
           sudo apt-get update
           sudo apt-get install -y playit
+      
+      - name: Configure Playit
+        env:
+          PLAYIT_SECRET: ${{ secrets.PLAYIT_SECRET }}
+        run: |
+          if [ -z "$PLAYIT_SECRET" ]; then
+            echo "ERROR: PLAYIT_SECRET is not configured."
+            exit 1
+          fi
+
+          sudo mkdir -p /etc/playit
+
+          printf 'secret_key = "%s"\n' "$PLAYIT_SECRET" \
+            | sudo tee /etc/playit/playit.toml >/dev/null
+
+          sudo chmod 600 /etc/playit/playit.toml
+
+          echo "Playit secret configured."
       # ─────────────────────────────────────────────
       # Download latest official Bedrock server
       # ─────────────────────────────────────────────
@@ -209,43 +227,24 @@ jobs:
 
       - name: Start Playit
         run: |
-          echo "Starting Playit..."
+          echo "Starting Playit service..."
 
-          sudo systemctl stop playit 2>/dev/null || true
-
-          sudo rm -f /run/playit/playitd.sock
-
-          sudo /opt/playit/playitd \
-            --secret-path /etc/playit/playit.toml \
-            --socket-path /run/playit/playitd.sock \
-            --log-path /tmp/playit.log \
-            > /tmp/playit-stdout.log 2>&1 &
-
-          PLAYIT_PID=$!
-          echo "$PLAYIT_PID" > /tmp/playit.pid
+          sudo systemctl restart playit
 
           sleep 15
 
-          echo "===== PLAYIT STDOUT ====="
-          cat /tmp/playit-stdout.log || true
+          echo "=============================================="
+          echo "PLAYIT STATUS"
+          echo "=============================================="
 
-          echo "===== PLAYIT LOG ====="
-          cat /tmp/playit.log || true
+          sudo systemctl status playit --no-pager || true
 
-          echo "===== PROCESS ====="
-          ps aux | grep '[p]layitd' || true
+          echo
+          echo "=============================================="
+          echo "PLAYIT LOGS"
+          echo "=============================================="
 
-          echo "===== PORT/NETWORK CHECK ====="
-          ss -tunap | grep playit || true
-
-          echo "===== WAITING 20 MORE SECONDS ====="
-          sleep 20
-
-          echo "===== PLAYIT LOG AFTER 35 SECONDS ====="
-          cat /tmp/playit.log || true
-
-          echo "===== PROCESS AFTER 35 SECONDS ====="
-          ps aux | grep '[p]layitd' || true
+          sudo journalctl -u playit --no-pager -n 100 || true
 
       # ─────────────────────────────────────────────
       # Keep workflow alive
