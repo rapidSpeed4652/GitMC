@@ -221,24 +221,39 @@ jobs:
 
           sudo systemctl stop playit 2>/dev/null || true
 
+          sudo rm -f /run/playit/playitd.sock
+
           sudo /opt/playit/playitd \
             --secret-path /etc/playit/playit.toml \
-            > /tmp/playit.log 2>&1 &
+            --socket-path /run/playit/playitd.sock \
+            --log-path /tmp/playit.log \
+            > /tmp/playit-stdout.log 2>&1 &
 
           PLAYIT_PID=$!
           echo "$PLAYIT_PID" > /tmp/playit.pid
 
-          sleep 10
+          sleep 15
 
-          echo
-          echo "=============================================="
-          echo "PLAYIT"
-          echo "=============================================="
+          echo "===== PLAYIT STDOUT ====="
+          cat /tmp/playit-stdout.log || true
 
-          cat /tmp/playit.log
+          echo "===== PLAYIT LOG ====="
+          cat /tmp/playit.log || true
 
-          echo
-          echo "=============================================="
+          echo "===== PROCESS ====="
+          ps aux | grep '[p]layitd' || true
+
+          echo "===== PORT/NETWORK CHECK ====="
+          ss -tunap | grep playit || true
+
+          echo "===== WAITING 20 MORE SECONDS ====="
+          sleep 20
+
+          echo "===== PLAYIT LOG AFTER 35 SECONDS ====="
+          cat /tmp/playit.log || true
+
+          echo "===== PROCESS AFTER 35 SECONDS ====="
+          ps aux | grep '[p]layitd' || true
 
       # ─────────────────────────────────────────────
       # Keep workflow alive
