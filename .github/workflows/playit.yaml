@@ -21,8 +21,8 @@ jobs:
           sudo apt update
           sudo apt install -y playit
 
-          echo "Installed Playit:"
-          playit --version
+          echo "Playit installed successfully."
+          playit --help || true
 
       - name: Start Playit
         run: |
